@@ -29,13 +29,13 @@ import edu.umd.cs.findbugs.annotations.NonNull;
 import hudson.Extension;
 import hudson.ExtensionList;
 import java.util.HashMap;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
 import org.kohsuke.accmod.Restricted;
 import org.kohsuke.accmod.restrictions.NoExternalUse;
@@ -135,7 +135,12 @@ public class SensitiveContentFilter implements ContentFilter {
         final Map<String, ContentMapping> matchedMappings = new HashMap<>();
         final WordsTrie trie = new WordsTrie();
         final ContentMappings mappings = ContentMappings.get();
-        Set<String> stopWords = mappings.getStopWords();
+        // Normalize the stop words too, so both sides of the check below use the same derivation as the keys, the
+        // trie and the input. The set is populated with toLowerCase(ENGLISH) from several sources, which agrees
+        // with normalizeCase on ASCII but not outside it.
+        Set<String> stopWords = mappings.getStopWords().stream()
+                .map(SensitiveContentFilter::normalizeCase)
+                .collect(Collectors.toSet());
 
         // Pre-fill with existing mappings (but filter out IPs that is handled by a different filter)
         // This is required to filter out names of items that does not exist anymore, for which they could be record
@@ -145,9 +150,7 @@ public class SensitiveContentFilter implements ContentFilter {
                 .filter(mapping -> !mapping.getReplacement().startsWith("ip_"))
                 .forEach(contentMapping -> {
                     String normalizedOriginal = normalizeCase(contentMapping.getOriginal());
-                    // Stop-word comparison stays on toLowerCase(ENGLISH) because the stop-word set is populated
-                    // that way from multiple sources, and stop words are ASCII in practice so the two agree.
-                    if (!stopWords.contains(contentMapping.getOriginal().toLowerCase(Locale.ENGLISH))) {
+                    if (!stopWords.contains(normalizedOriginal)) {
                         replacementsMap.put(normalizedOriginal, contentMapping.getReplacement());
                         matchedMappings.put(normalizedOriginal, contentMapping);
                         trie.add(normalizedOriginal);
@@ -161,9 +164,7 @@ public class SensitiveContentFilter implements ContentFilter {
                     // conditional here. Or find a better way to deal with insensitive key mapping in general.
                     // But the reload is already quite fast anyway. (~1s for 10^4 items with 1 CPU / 2 GB memory
                     // container)
-                    // Stop-word comparison stays on toLowerCase(ENGLISH) because the stop-word set is populated
-                    // that way from multiple sources, and stop words are ASCII in practice so the two agree.
-                    if (!stopWords.contains(name.toLowerCase(Locale.ENGLISH))) {
+                    if (!stopWords.contains(normalizedOriginal)) {
                         // getMappingOrCreate touches the mapping (refreshes lastSeen) on every call, hit or miss --
                         // that's the "live" signal, since name is something a NameProvider currently reports.
                         ContentMapping mapping = mappings.getMappingOrCreate(

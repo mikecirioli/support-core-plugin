@@ -182,6 +182,18 @@ class SensitiveContentFilterTest {
     }
 
     @Test
+    void stopWordsMatchNonAsciiCaseVariants(JenkinsRule j) throws IOException {
+        // "jenkins" is a default stop word and "jenkinſ" normalizes to it, so the mapping must be suppressed.
+        // Deriving the candidate with toLowerCase(ENGLISH) left ſ alone and missed the stop word.
+        SensitiveContentFilter filter = SensitiveContentFilter.get();
+        ContentMappings mappings = ContentMappings.get();
+        mappings.getMappingOrCreate("jenkinſ", original -> ContentMapping.of(original, "replacement_jenkins"));
+        filter.reload();
+
+        assertThat(filter.filter("the jenkinſ server")).isEqualTo("the jenkinſ server");
+    }
+
+    @Test
     void turkishCapitalIDotAbovePreservesLength(JenkinsRule j) throws IOException {
         // Turkish İ (U+0130) grows from 7 to 8 chars when lowercased with toLowerCase(ENGLISH), corrupting
         // trie literals and offsets. normalizeCase preserves length, so the name is redacted correctly.
