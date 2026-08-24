@@ -135,9 +135,10 @@ public class SensitiveContentFilter implements ContentFilter {
         final Map<String, ContentMapping> matchedMappings = new HashMap<>();
         final WordsTrie trie = new WordsTrie();
         final ContentMappings mappings = ContentMappings.get();
-        // Normalize the stop words too, so both sides of the check below use the same derivation as the keys, the
-        // trie and the input. The set is populated with toLowerCase(ENGLISH) from several sources, which agrees
-        // with normalizeCase on ASCII but not outside it.
+        // The gate below compares the trie key, not the raw original, so stop words need the same derivation.
+        // Otherwise two originals that collapse to one key (sap, ſap) are gated differently, the ungated one
+        // puts that key in the trie, and the stop word stops working. Sources are mixed -- some lowercase with
+        // ENGLISH, some add raw values -- so normalizing here is what makes the check total.
         Set<String> stopWords = mappings.getStopWords().stream()
                 .map(SensitiveContentFilter::normalizeCase)
                 .collect(Collectors.toSet());
