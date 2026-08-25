@@ -134,7 +134,7 @@ public class SensitiveContentFilter implements ContentFilter {
                         // getMappingOrCreate touches the mapping (refreshes lastSeen) on every call, hit or miss --
                         // that's the "live" signal, since name is something a NameProvider currently reports.
                         ContentMapping mapping = mappings.getMappingOrCreate(
-                                name, original -> ContentMapping.of(original, provider.generateFake()));
+                                name, original -> ContentMapping.of(original, provider.generateFake(original)));
                         // Matcher#appendReplacement needs to have the `\` and `$` escaped.
                         replacementsMap.putIfAbsent(
                                 lowerCaseOriginal,
