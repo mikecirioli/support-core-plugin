@@ -160,8 +160,11 @@ public class SensitiveContentFilter implements ContentFilter {
                 .forEach(contentMapping -> {
                     String normalizedOriginal = normalizeCase(contentMapping.getOriginal());
                     if (!stopWords.contains(normalizedOriginal)) {
-                        replacementsMap.put(normalizedOriginal, contentMapping.getReplacement());
-                        matchedMappings.put(normalizedOriginal, contentMapping);
+                        // putIfAbsent, not put: matches the provider loop's collision policy below. Two
+                        // originals that normalize to the same key (sap, ſap) must resolve to the same winner
+                        // on every reload, not whichever happens to sort last in the persisted table.
+                        replacementsMap.putIfAbsent(normalizedOriginal, contentMapping.getReplacement());
+                        matchedMappings.putIfAbsent(normalizedOriginal, contentMapping);
                         trie.add(normalizedOriginal);
                     }
                 });

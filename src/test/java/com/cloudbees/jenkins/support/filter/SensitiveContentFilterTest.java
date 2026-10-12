@@ -276,4 +276,40 @@ class SensitiveContentFilterTest {
         String result2 = filter.filter(" sap");
         assertThat(result2).isEqualTo(" replacement_sap");
     }
+
+    @Test
+    void collidingOriginalsResolveToTheSameMappingAcrossReloads(JenkinsRule j) throws IOException {
+        // "sap" and "ſap" (long s, U+017F) normalize to the same key. The pre-fill loop and the provider
+        // loop must agree on one winner and keep agreeing on every later reload -- otherwise the same input
+        // resolves to a different pseudonym, and a different mapping gets touched/kept alive, depending on
+        // when the colliding mapping happened to get persisted relative to the reload.
+        SensitiveContentFilter filter = SensitiveContentFilter.get();
+        ContentMappings mappings = ContentMappings.get();
+
+        mappings.getMappingOrCreate("sap", original -> ContentMapping.of(original, "replacement_sap"));
+        filter.reload();
+        String replacement = filter.filter("sap");
+        assertThat(replacement).isEqualTo("replacement_sap");
+
+        // The second collider arrives through a NameProvider (an item named "ſap"), persisted during this
+        // reload's provider loop -- too late to affect this reload's winner, but present for the next one.
+        j.createFreeStyleProject("ſap");
+        filter.reload();
+        assertThat(filter.filter("sap")).isEqualTo(replacement);
+
+        // Third reload: the pre-fill loop now sees both persisted mappings. The winner must still be "sap".
+        filter.reload();
+        assertThat(filter.filter("sap")).isEqualTo(replacement);
+
+        // The match must still be attributed to the "sap" mapping, not the item's: back-date both, match
+        // once, then evict -- only the mapping actually matched should survive.
+        Instant staleTime = Instant.now().minus(Duration.ofDays(91));
+        backdate(mappings, "sap", staleTime);
+        backdate(mappings, "ſap", staleTime);
+
+        filter.filter("sap");
+        mappings.evictStale();
+
+        assertThat(mappings.getMappings()).containsKey("sap").doesNotContainKey("ſap");
+    }
 }
