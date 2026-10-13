@@ -86,7 +86,8 @@ public class DataFaker implements ExtensionPoint, Function<Function<String, Stri
                 | (mac[3] & 0xFF);
         String tail = String.format("%02x%02x%02x%02x", mac[4] & 0xFF, mac[5] & 0xFF, mac[6] & 0xFF, mac[7] & 0xFF);
 
-        String name = nameTransformer.apply(wordFor(idx)).toLowerCase(Locale.ENGLISH).replace(' ', '_');
+        String name =
+                nameTransformer.apply(wordFor(idx)).toLowerCase(Locale.ENGLISH).replace(' ', '_');
         return name + "_" + tail;
     }
 
