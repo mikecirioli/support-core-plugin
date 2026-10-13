@@ -1,12 +1,12 @@
 package com.cloudbees.jenkins.support.impl;
 
+import static org.awaitility.Awaitility.await;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.text.MatchesPattern.matchesPattern;
 
 import com.cloudbees.jenkins.support.SupportTestUtils;
-import hudson.model.Label;
 import hudson.slaves.DumbSlave;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -19,12 +19,18 @@ import org.jvnet.hudson.test.junit.jupiter.WithJenkins;
 @WithJenkins
 class NodeRemoteDirectoryComponentTest {
 
+    private DumbSlave createAgent(JenkinsRule j) throws Exception {
+        var agent = j.createOnlineSlave();
+        await().until(agent.getRootPath()::isDirectory);
+        return agent;
+    }
+
     /*
      * Test adding agent remote directory content with the defaults.
      */
     @Test
     void addContents(JenkinsRule j) throws Exception {
-        DumbSlave agent = j.createOnlineSlave(Label.parseExpression("test"), null);
+        var agent = createAgent(j);
 
         Map<String, String> output =
                 SupportTestUtils.invokeComponentToMap(new NodeRemoteDirectoryComponent(), agent.toComputer());
@@ -38,9 +44,7 @@ class NodeRemoteDirectoryComponentTest {
      */
     @Test
     void addContentsWithExcludes(JenkinsRule j) throws Exception {
-        DumbSlave agent = j.createSlave("agent1", "test", null);
-        agent.getComputer().connect(false).get();
-        j.waitOnline(agent);
+        var agent = createAgent(j);
 
         Map<String, String> output = SupportTestUtils.invokeComponentToMap(
                 new NodeRemoteDirectoryComponent("", "**/*.log", true, 10), agent.toComputer());
@@ -54,9 +58,7 @@ class NodeRemoteDirectoryComponentTest {
      */
     @Test
     void addContentsWithIncludes(JenkinsRule j) throws Exception {
-        DumbSlave agent = j.createSlave("agent1", "test", null);
-        agent.getComputer().connect(false).get();
-        j.waitOnline(agent);
+        var agent = createAgent(j);
 
         Map<String, String> output = SupportTestUtils.invokeComponentToMap(
                 new NodeRemoteDirectoryComponent("support/*.log", "", true, 10), agent.toComputer());
@@ -70,9 +72,7 @@ class NodeRemoteDirectoryComponentTest {
      */
     @Test
     void addContentsWithMaxDepth(JenkinsRule j) throws Exception {
-        DumbSlave agent = j.createSlave("agent1", "test", null);
-        agent.getComputer().connect(false).get();
-        j.waitOnline(agent);
+        var agent = createAgent(j);
 
         Map<String, String> output = SupportTestUtils.invokeComponentToMap(
                 new NodeRemoteDirectoryComponent("", "", true, 1), agent.toComputer());
