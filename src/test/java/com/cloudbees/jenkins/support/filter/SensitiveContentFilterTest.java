@@ -259,6 +259,22 @@ class SensitiveContentFilterTest {
     }
 
     @Test
+    void normalizeCasePreservesUtf16WidthForEveryCodePoint() {
+        // Offset splicing (replaceWordsByOffset) assumes folding a code point never changes how many
+        // UTF-16 code units it needs; otherwise offsets between the original and normalized strings
+        // desync and splicing corrupts or misaligns content. The targeted tests above (Turkish İ, long
+        // s) pin known cases; this exhaustively checks every code point through normalizeCase itself
+        // (not a reimplementation of its fold) so a future JDK Unicode table change, or a change to
+        // normalizeCase's own logic, can't silently break the invariant unnoticed.
+        for (int cp = Character.MIN_CODE_POINT; cp <= Character.MAX_CODE_POINT; cp++) {
+            String single = new String(Character.toChars(cp));
+            assertThat(SensitiveContentFilter.normalizeCase(single).length())
+                    .as("U+%04X normalizes to a different UTF-16 width", cp)
+                    .isEqualTo(Character.charCount(cp));
+        }
+    }
+
+    @Test
     void wordBoundarySemantics(JenkinsRule j) throws IOException {
         // Java's \w is ASCII-only by default. normalizeCase on "ſſap" -> "ssap" where the lookbehind now sees
         // a word character 's' and rejects a match that the old regex (with UNICODE_CASE) would have accepted

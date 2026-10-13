@@ -4,7 +4,10 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.function.Function;
 import java.util.regex.Pattern;
+import org.kohsuke.accmod.Restricted;
+import org.kohsuke.accmod.restrictions.NoExternalUse;
 
+@Restricted(NoExternalUse.class)
 public class WordReplacer {
 
     /**

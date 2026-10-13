@@ -26,8 +26,7 @@ package com.cloudbees.jenkins.support.filter;
 import static org.junit.jupiter.api.Assertions.*;
 
 import hudson.ExtensionList;
-import java.util.HashSet;
-import java.util.Set;
+import java.util.function.Function;
 import java.util.regex.Pattern;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -104,17 +103,36 @@ class DataFakerTest {
     }
 
     @Test
-    void collisionSanityCheck(JenkinsRule r) {
-        DataFaker faker = ExtensionList.lookupSingleton(DataFaker.class);
-        Set<String> pseudonyms = new HashSet<>();
-        int iterations = 200000;
+    void pseudonymCombinesWordAndTailIndependently() {
+        // A statistical zero-collision check over N random draws has a real, non-negligible chance of
+        // a false failure as N grows (birthday bound over the dictionary-size x 2^32 namespace), so
+        // exercise the namespace structurally instead with controlled MAC bytes -- this can never flake.
+        Function<String, String> identity = Function.identity();
 
-        for (int i = 0; i < iterations; i++) {
-            String pseudonym = faker.apply(name -> "user_" + name).apply("original" + i);
-            pseudonyms.add(pseudonym);
-        }
+        byte[] macBase = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+        byte[] macSameWordDifferentTail = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01};
+        byte[] macDifferentWordSameTail = {0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00};
 
-        assertEquals(iterations, pseudonyms.size(), "Expected zero collisions in " + iterations + " iterations");
+        assertEquals(
+                DataFaker.pseudonymFor(macBase, identity),
+                DataFaker.pseudonymFor(macBase.clone(), identity),
+                "Same MAC bytes must always produce the same pseudonym");
+
+        assertNotEquals(
+                DataFaker.pseudonymFor(macBase, identity),
+                DataFaker.pseudonymFor(macSameWordDifferentTail, identity),
+                "Same word (identical idx bytes), different tail must not collide");
+
+        assertNotEquals(
+                DataFaker.pseudonymFor(macBase, identity),
+                DataFaker.pseudonymFor(macDifferentWordSameTail, identity),
+                "Different word, same tail must not collide");
+
+        // The tail is rendered from unsigned bytes -- 0xFF must not sign-extend into the hex string.
+        byte[] macMaxTail = {0x00, 0x00, 0x00, 0x00, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF};
+        assertTrue(
+                DataFaker.pseudonymFor(macMaxTail, identity).endsWith("_ffffffff"),
+                "Tail bytes of 0xFF must render as 'ffffffff', not sign-extended");
     }
 
     @LocalData

@@ -74,6 +74,23 @@ public class DataFaker implements ExtensionPoint, Function<Function<String, Stri
     }
 
     /**
+     * Derives a pseudonym from raw MAC bytes: the first 4 bytes select a dictionary word, the next
+     * 4 render as an 8-hex-character tail, so the two halves of the namespace vary independently.
+     * Split out from {@link #apply} so tests can exercise the derivation with controlled MAC bytes
+     * instead of relying on statistical sampling of real HMAC output.
+     */
+    static String pseudonymFor(byte[] mac, Function<String, String> nameTransformer) {
+        long idx = ((long) (mac[0] & 0xFF) << 24)
+                | ((long) (mac[1] & 0xFF) << 16)
+                | ((long) (mac[2] & 0xFF) << 8)
+                | (mac[3] & 0xFF);
+        String tail = String.format("%02x%02x%02x%02x", mac[4] & 0xFF, mac[5] & 0xFF, mac[6] & 0xFF, mac[7] & 0xFF);
+
+        String name = nameTransformer.apply(wordFor(idx)).toLowerCase(Locale.ENGLISH).replace(' ', '_');
+        return name + "_" + tail;
+    }
+
+    /**
      * Applies the provided function to a deterministic name derived from the original and normalizes the result.
      *
      * @param nameTransformer function to apply to the generated word pair (e.g., adds prefix like "user_")
@@ -81,20 +98,6 @@ public class DataFaker implements ExtensionPoint, Function<Function<String, Stri
      */
     @Override
     public Function<String, String> apply(@NonNull Function<String, String> nameTransformer) {
-        return original -> {
-            byte[] mac = PSEUDONYMS.mac(original.getBytes(StandardCharsets.UTF_8));
-            // First 4 bytes for dictionary index, next 4 for the 8-hex-character tail
-            long idx = ((long) (mac[0] & 0xFF) << 24)
-                    | ((long) (mac[1] & 0xFF) << 16)
-                    | ((long) (mac[2] & 0xFF) << 8)
-                    | (mac[3] & 0xFF);
-            String tail = String.format("%02x%02x%02x%02x", mac[4] & 0xFF, mac[5] & 0xFF, mac[6] & 0xFF, mac[7] & 0xFF);
-
-            String name = nameTransformer
-                    .apply(wordFor(idx))
-                    .toLowerCase(Locale.ENGLISH)
-                    .replace(' ', '_');
-            return name + "_" + tail;
-        };
+        return original -> pseudonymFor(PSEUDONYMS.mac(original.getBytes(StandardCharsets.UTF_8)), nameTransformer);
     }
 }
