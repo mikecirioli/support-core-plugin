@@ -75,9 +75,17 @@ public class SensitiveContentFilter implements ContentFilter {
     }
 
     /**
-     * Normalize case per code point, replicating what {@code Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE}
-     * does internally when matching. This is <em>not</em> Unicode normalization (NFC/NFKC); it's a case-folding
-     * operation: {@code Character.toLowerCase(Character.toUpperCase(codePoint))}.
+     * Lowercase per code point. This is <em>not</em> Unicode normalization (NFC/NFKC), and deliberately not
+     * full Unicode case folding either: folding via {@code toLowerCase(toUpperCase(cp))} additionally maps
+     * already-lowercase variants onto a different letter, which merges characters that are distinct letters
+     * rather than case variants -- Turkish {@code ı} onto {@code i} being the clearest example. Because
+     * {@link #reload()} keys the lookup by this value, such a merge makes two different originals share one
+     * pseudonym. Plain lowercasing keeps them apart.
+     * <p>
+     * Operating per code point (rather than on the whole string) is what guarantees the result has the same
+     * UTF-16 length as the input, which {@link WordReplacer#replaceWordsByOffset} relies on to splice
+     * replacements back into the un-normalized original. {@code "İ".toLowerCase(ENGLISH)} returns two chars
+     * and would desync those offsets; {@code Character.toLowerCase(cp)} cannot.
      * <p>
      * Includes an identity fast path: returns the input unchanged when no code point would be altered, so
      * already-normalized strings share storage with their keys rather than duplicating the char array.
@@ -91,7 +99,7 @@ public class SensitiveContentFilter implements ContentFilter {
         boolean needsNormalization = false;
         for (int i = 0, len = value.length(); i < len; ) {
             int cp = value.codePointAt(i);
-            int normalized = Character.toLowerCase(Character.toUpperCase(cp));
+            int normalized = Character.toLowerCase(cp);
             if (cp != normalized) {
                 needsNormalization = true;
                 break;
@@ -106,7 +114,7 @@ public class SensitiveContentFilter implements ContentFilter {
         StringBuilder sb = new StringBuilder(value.length());
         for (int i = 0, len = value.length(); i < len; ) {
             int cp = value.codePointAt(i);
-            sb.appendCodePoint(Character.toLowerCase(Character.toUpperCase(cp)));
+            sb.appendCodePoint(Character.toLowerCase(cp));
             i += Character.charCount(cp);
         }
         return sb.toString();

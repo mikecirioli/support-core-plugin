@@ -193,29 +193,32 @@ class SensitiveContentFilterTest {
     }
 
     @Test
-    void longSMatches(JenkinsRule j) throws IOException {
-        // Long s (U+017F) normalizes to 's' via Character.toLowerCase(Character.toUpperCase(cp)),
-        // matching what Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE does. But "ſap".toLowerCase(ENGLISH)
-        // is unchanged (ſ is already lowercase), so the old code crashed with NPE on a null replacement.
+    void longSIsNotFoldedOntoPlainS(JenkinsRule j) throws IOException {
+        // normalizeCase lowercases per code point and deliberately does not case-fold, so the long s
+        // (U+017F, already lowercase) stays itself rather than becoming 's'. "ſap" is therefore a
+        // different key from "sap" and is left alone. Folding them together would be worse than a missed
+        // match: distinct originals sharing a key means one takes the other's pseudonym.
+        // This also pins the absence of the old NPE, which came from the pattern folding ſ onto s while
+        // the key map did not, leaving the match with no replacement to resolve to.
         SensitiveContentFilter filter = SensitiveContentFilter.get();
         ContentMappings mappings = ContentMappings.get();
         mappings.getMappingOrCreate("sap", original -> ContentMapping.of(original, "replacement_sap"));
         filter.reload();
 
-        String result = filter.filter("the ſap server");
-        assertThat(result).isEqualTo("the replacement_sap server");
+        assertThat(filter.filter("the ſap server")).isEqualTo("the ſap server");
+        assertThat(filter.filter("the sap server")).isEqualTo("the replacement_sap server");
     }
 
     @Test
-    void stopWordsMatchNonAsciiCaseVariants(JenkinsRule j) throws IOException {
-        // "jenkins" is a default stop word and "jenkinſ" normalizes to it, so the mapping must be suppressed.
-        // Deriving the candidate with toLowerCase(ENGLISH) left ſ alone and missed the stop word.
+    void stopWordsGateCaseVariants(JenkinsRule j) throws IOException {
+        // The gate compares the normalized key, not the raw original, so a case variant of a stop word is
+        // still gated. Comparing raw originals would let "JENKINS" through while "jenkins" was suppressed.
         SensitiveContentFilter filter = SensitiveContentFilter.get();
         ContentMappings mappings = ContentMappings.get();
-        mappings.getMappingOrCreate("jenkinſ", original -> ContentMapping.of(original, "replacement_jenkins"));
+        mappings.getMappingOrCreate("JENKINS", original -> ContentMapping.of(original, "replacement_jenkins"));
         filter.reload();
 
-        assertThat(filter.filter("the jenkinſ server")).isEqualTo("the jenkinſ server");
+        assertThat(filter.filter("the JENKINS server")).isEqualTo("the JENKINS server");
     }
 
     @Test
@@ -276,17 +279,17 @@ class SensitiveContentFilterTest {
 
     @Test
     void wordBoundarySemantics(JenkinsRule j) throws IOException {
-        // Java's \w is ASCII-only by default. normalizeCase on "ſſap" -> "ssap" where the lookbehind now sees
-        // a word character 's' and rejects a match that the old regex (with UNICODE_CASE) would have accepted
-        // if ſ were considered non-\w. Pin the intended behavior.
+        // The pattern is wrapped in (?<!\w) ... (?!\w), so a name only matches as a whole word. Java's \w is
+        // ASCII-only by default, which is what decides whether a neighbouring character blocks a match.
         SensitiveContentFilter filter = SensitiveContentFilter.get();
         ContentMappings mappings = ContentMappings.get();
         mappings.getMappingOrCreate("sap", original -> ContentMapping.of(original, "replacement_sap"));
         filter.reload();
 
-        // "ſſap" normalizes to "ssap", and "ssap" should NOT match due to the lookbehind (?<!\w) seeing 's'.
-        String result = filter.filter("ſſap");
-        assertThat(result).isEqualTo("ſſap"); // no replacement
+        // "ssap" must NOT match: the lookbehind sees the preceding 's', an ASCII word character.
+        assertThat(filter.filter("ssap")).isEqualTo("ssap");
+        // Trailing word characters block it too.
+        assertThat(filter.filter("sapling")).isEqualTo("sapling");
 
         // " sap" should match (space is not \w).
         String result2 = filter.filter(" sap");
@@ -295,37 +298,41 @@ class SensitiveContentFilterTest {
 
     @Test
     void collidingOriginalsResolveToTheSameMappingAcrossReloads(JenkinsRule j) throws IOException {
-        // "sap" and "ſap" (long s, U+017F) normalize to the same key. The pre-fill loop and the provider
-        // loop must agree on one winner and keep agreeing on every later reload -- otherwise the same input
-        // resolves to a different pseudonym, and a different mapping gets touched/kept alive, depending on
-        // when the colliding mapping happened to get persisted relative to the reload.
+        // "sap" and "SAP" are distinct originals that normalize to the same key. The pre-fill loop and the
+        // provider loop must agree on one winner and keep agreeing on every later reload -- otherwise the
+        // same input resolves to a different pseudonym, and a different mapping gets touched/kept alive,
+        // depending on when the colliding mapping happened to get persisted relative to the reload.
         SensitiveContentFilter filter = SensitiveContentFilter.get();
         ContentMappings mappings = ContentMappings.get();
 
-        mappings.getMappingOrCreate("sap", original -> ContentMapping.of(original, "replacement_sap"));
+        // "SAP" is the expected winner because the pre-fill loop iterates ContentMappings in its own
+        // comparator order (length descending, then natural order) and takes the first write, and "SAP"
+        // sorts before "sap". Picking the collider that sorts first is what makes the winner stable here;
+        // the policy keys off sort order rather than which original was persisted first.
+        mappings.getMappingOrCreate("SAP", original -> ContentMapping.of(original, "replacement_sap"));
         filter.reload();
         String replacement = filter.filter("sap");
         assertThat(replacement).isEqualTo("replacement_sap");
 
-        // The second collider arrives through a NameProvider (an item named "ſap"), persisted during this
+        // The second collider arrives through a NameProvider (an item named "sap"), persisted during this
         // reload's provider loop -- too late to affect this reload's winner, but present for the next one.
-        j.createFreeStyleProject("ſap");
+        j.createFreeStyleProject("sap");
         filter.reload();
         assertThat(filter.filter("sap")).isEqualTo(replacement);
 
-        // Third reload: the pre-fill loop now sees both persisted mappings. The winner must still be "sap".
+        // Third reload: the pre-fill loop now sees both persisted mappings. The winner must still be "SAP".
         filter.reload();
         assertThat(filter.filter("sap")).isEqualTo(replacement);
 
-        // The match must still be attributed to the "sap" mapping, not the item's: back-date both, match
+        // The match must still be attributed to the "SAP" mapping, not the item's: back-date both, match
         // once, then evict -- only the mapping actually matched should survive.
         Instant staleTime = Instant.now().minus(Duration.ofDays(91));
+        backdate(mappings, "SAP", staleTime);
         backdate(mappings, "sap", staleTime);
-        backdate(mappings, "ſap", staleTime);
 
         filter.filter("sap");
         mappings.evictStale();
 
-        assertThat(mappings.getMappings()).containsKey("sap").doesNotContainKey("ſap");
+        assertThat(mappings.getMappings()).containsKey("SAP").doesNotContainKey("sap");
     }
 }
