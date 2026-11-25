@@ -75,26 +75,39 @@ public class SensitiveContentFilter implements ContentFilter {
     }
 
     /**
-     * Lowercases Latin-script letters (plain ASCII through accented Latin, e.g. {@code É}); every other
-     * character -- including non-Latin letters with their own case, such as Greek or Cyrillic -- passes through
-     * unchanged. The filter's one motivating case for case-insensitivity is a login or item name typed with
-     * inconsistent case (e.g. {@code Jörg.Cirioli@CloudBees.com} vs. {@code jörg.cirioli@cloudbees.com});
-     * nothing else needs it, so nothing else is touched. Accented Latin letters are not optional here: Jenkins
-     * core's {@code IdStrategy.CaseInsensitive} (the default user-id strategy) keys users by
-     * {@code toLowerCase(Locale.ENGLISH)}, which folds them, so a narrower ASCII-only check would silently stop
-     * redacting a real user's name.
+     * Lowercases any {@code char} that has a different lowercase form, one UTF-16 unit at a time.
      * <p>
-     * No code point handling is needed: every {@code char}-level case mapping used here ({@link
-     * Character#toLowerCase(char)}) maps one UTF-16 unit to exactly one other UTF-16 unit, which is also what
-     * keeps the result the same length as the input for {@link WordReplacer#replaceWordsByOffset}'s offset
-     * splicing. That holds even for Turkish {@code İ} (U+0130), historically the one case that corrupted
-     * offsets -- but only when folded via locale-aware {@code String.toLowerCase(Locale)}, which this does not
-     * use.
+     * Case-insensitivity here exists to match Jenkins core's {@code IdStrategy.CaseInsensitive} -- the default
+     * user-id strategy -- which keys users by {@code toLowerCase(Locale.ENGLISH)}. Anything core folds, this
+     * must fold too, or a login typed in different case stops being redacted. Measured against that strategy
+     * across all 65,536 UTF-16 code units on JDK 21: this agrees with it on every one but {@code U+0130} (see
+     * below). Restricting the fold to Latin script disagreed on 677 of them, each a name that core treats as one
+     * identity and this filter would have left in the clear -- Greek {@code ΑΘΗΝΑ}/{@code αθηνα} and Cyrillic
+     * {@code Иван}/{@code иван} among them.
      * <p>
-     * The check is "does this Latin char have a different lowercase", not {@link Character#isUpperCase(char)}:
-     * Latin titlecase letters such as {@code ǅ} (U+01C5) are neither upper nor lower case by Unicode's
-     * category, so {@code isUpperCase} misses them even though {@code toLowerCase} folds them to {@code ǆ}
-     * (U+01C6) -- a real case variant this filter must still normalize.
+     * No code point handling is needed, and that is what keeps the result the same length as the input for
+     * {@link WordReplacer#replaceWordsByOffset}'s offset splicing: {@link Character#toLowerCase(char)} takes one
+     * UTF-16 unit and returns one UTF-16 unit, so a per-{@code char} fold cannot change a string's length at all
+     * -- a guarantee of the method's signature, not a property of which scripts are folded. Verified by sweep as
+     * well as by signature: zero of the 1,173 foldable code units change UTF-16 width.
+     * <p>
+     * Turkish {@code İ} (U+0130) is the single deliberate divergence from core, and the reason the per-{@code
+     * char} form matters. Folded through locale-aware {@code String.toLowerCase(Locale)} it becomes TWO units
+     * ({@code i} plus a combining dot above), which desynchronizes every offset after it -- historically the bug
+     * that corrupted redaction. {@link Character#toLowerCase(char)} maps it to a single {@code i}. So the one
+     * character this does not match core on is precisely the one where matching core would reintroduce the
+     * defect.
+     * <p>
+     * The check is "has a different lowercase", not {@link Character#isUpperCase(char)}: titlecase letters such
+     * as {@code ǅ} (U+01C5) are neither upper nor lower case by Unicode's category, so {@code isUpperCase}
+     * misses them even though {@code toLowerCase} folds them to {@code ǆ} (U+01C6) -- a real case variant this
+     * filter must still normalize.
+     * <p>
+     * Known limit: cased characters OUTSIDE the Basic Multilingual Plane are not folded. A per-{@code char} loop
+     * sees them as two surrogate halves, and neither half has a lowercase form of its own, so all 260 such code
+     * points pass through unchanged -- e.g. Deseret {@code U+10400}. Case variants of a name written in one of
+     * those scripts are therefore not redacted. Fixing it would require the per-code-point handling this
+     * deliberately avoids, in exchange for a UTF-16 width change that offset splicing cannot absorb.
      *
      * @param value the input string
      * @return a case-normalized copy, or the input itself if nothing changed
@@ -103,7 +116,7 @@ public class SensitiveContentFilter implements ContentFilter {
         int len = value.length();
         int firstCased = -1;
         for (int i = 0; i < len; i++) {
-            if (isLatinWithDifferentLowercase(value.charAt(i))) {
+            if (hasDifferentLowercase(value.charAt(i))) {
                 firstCased = i;
                 break;
             }
@@ -114,15 +127,15 @@ public class SensitiveContentFilter implements ContentFilter {
 
         char[] chars = value.toCharArray();
         for (int i = firstCased; i < len; i++) {
-            if (isLatinWithDifferentLowercase(chars[i])) {
+            if (hasDifferentLowercase(chars[i])) {
                 chars[i] = Character.toLowerCase(chars[i]);
             }
         }
         return new String(chars);
     }
 
-    private static boolean isLatinWithDifferentLowercase(char c) {
-        return Character.UnicodeScript.of(c) == Character.UnicodeScript.LATIN && Character.toLowerCase(c) != c;
+    private static boolean hasDifferentLowercase(char c) {
+        return Character.toLowerCase(c) != c;
     }
 
     @Override

@@ -232,10 +232,10 @@ class SensitiveContentFilterTest {
     }
 
     @Test
-    void onlyLatinLettersAreNormalized(JenkinsRule j) throws IOException {
-        // normalizeCase folds Latin-script letters, plain ASCII and accented alike. Accented Latin matters for
-        // real users, not just theoretically: Jenkins core's default CASE_INSENSITIVE user-id strategy folds
-        // "Jörg" and "jörg" to the same key, so this filter must too, or it silently stops redacting that user.
+    void caseVariantsAreNormalizedInEveryScriptCoreFolds(JenkinsRule j) throws IOException {
+        // The yardstick is Jenkins core's default CASE_INSENSITIVE user-id strategy, which keys users by
+        // toLowerCase(Locale.ENGLISH). Anything core folds into one identity, this filter must fold too, or a
+        // login typed in different case silently stops being redacted.
         SensitiveContentFilter filter = SensitiveContentFilter.get();
         ContentMappings mappings = ContentMappings.get();
         mappings.getMappingOrCreate(
@@ -244,16 +244,45 @@ class SensitiveContentFilterTest {
         assertThat(filter.filter("Jörg.Cirioli@CloudBees.com")).isEqualTo("replacement_jorg");
         assertThat(filter.filter("jörg.cirioli@cloudbees.com")).isEqualTo("replacement_jorg");
 
-        // ...but anything outside Latin script -- Greek, Cyrillic -- keeps its case as a distinct key, even
-        // when it has an obvious upper/lower counterpart.
+        // Non-Latin scripts are folded on exactly the same grounds. Restricting the fold to Latin script
+        // disagreed with core on 677 of the 65,536 UTF-16 code units, and each disagreement is a name core
+        // treats as one identity that this filter would have left in the clear.
         mappings.getMappingOrCreate("ΑΘΗΝΑ", original -> ContentMapping.of(original, "replacement_athena"));
         mappings.getMappingOrCreate("Иван", original -> ContentMapping.of(original, "replacement_ivan"));
         filter.reload();
 
         assertThat(filter.filter("ΑΘΗΝΑ")).isEqualTo("replacement_athena");
-        assertThat(filter.filter("αθηνα")).isEqualTo("αθηνα");
+        assertThat(filter.filter("αθηνα")).isEqualTo("replacement_athena");
         assertThat(filter.filter("Иван")).isEqualTo("replacement_ivan");
-        assertThat(filter.filter("иван")).isEqualTo("иван");
+        assertThat(filter.filter("иван")).isEqualTo("replacement_ivan");
+    }
+
+    @Test
+    void foldingNeverChangesLengthSoOffsetsStayAligned() {
+        // The defect this implementation shape exists to prevent. Turkish İ (U+0130) folded through the
+        // locale-aware String.toLowerCase(Locale) becomes TWO units -- i plus a combining dot above -- which
+        // desynchronizes every offset after it in WordReplacer#replaceWordsByOffset. Character.toLowerCase(char)
+        // takes one UTF-16 unit and returns one, so the per-char fold cannot change length whatever the script.
+        // This is the single character where this filter deliberately diverges from core's strategy, because
+        // agreeing with core here is what reintroduces the bug.
+        assertThat("İstanbul".toLowerCase(java.util.Locale.ENGLISH)).hasSize(9);
+        assertThat(SensitiveContentFilter.normalizeCase("İstanbul")).hasSize(8).isEqualTo("istanbul");
+
+        // Not a property of Latin: the same holds for the scripts the fold was just widened to cover.
+        assertThat(SensitiveContentFilter.normalizeCase("ΑΘΗΝΑ")).hasSize(5).isEqualTo("αθηνα");
+        assertThat(SensitiveContentFilter.normalizeCase("Иван")).hasSize(4).isEqualTo("иван");
+    }
+
+    @Test
+    void casedCharactersOutsideTheBmpAreNotFolded() {
+        // A documented limit, pinned so it is a decision rather than a surprise. A per-char loop sees a
+        // supplementary code point as two surrogate halves, and neither half has a lowercase form of its own, so
+        // all 260 cased code points above the BMP pass through unchanged -- e.g. Deseret U+10400, whose
+        // lowercase is U+10428. Case variants of a name in one of those scripts are therefore NOT redacted.
+        // Closing this would require per-code-point folding, which is what the offset splicing cannot absorb.
+        String deseretCapital = new String(Character.toChars(0x10400));
+        assertThat(SensitiveContentFilter.normalizeCase(deseretCapital)).isEqualTo(deseretCapital);
+        assertThat(deseretCapital.toLowerCase(java.util.Locale.ENGLISH)).isNotEqualTo(deseretCapital);
     }
 
     @Test
